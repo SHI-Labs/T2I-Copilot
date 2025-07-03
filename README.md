@@ -7,7 +7,7 @@
 </div>
 
 
-<!-- ![Header Image Placeholder](assets/fig-Teaser-Mustang.jpg) -->
+![Header Image Placeholder](assets/fig-Teaser-Mustang.jpg)
 
 ## 📰 News
 - [2025-6-26] 🎉🎉🎉 T2I-Copilot is accepted by ICCV 2025.
