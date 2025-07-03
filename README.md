@@ -112,14 +112,6 @@ python main.py --use_open_llm \
 | `--open_llm_model` | Open LLM model name | `mistralai/Mistral-Small-3.1-24B-Instruct-2503` |
 | `--open_llm_port` | vLLM server port | `8000` |
 
-## 🎨 Model Integration
-
-- **[FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev)**: High-quality text-to-image generation
-- **[PowerPaint](https://github.com/open-mmlab/PowerPaint)**: Image inpainting & editing
-- **[GroundingSAM2](https://github.com/IDEA-Research/Grounded-SAM-2)**: Mask generation for editing
-
-Please download checkpoints from these resources.
-
 ## 🔍 Troubleshooting
 
 
