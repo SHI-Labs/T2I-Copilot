@@ -21,8 +21,8 @@
 ## 📑 Open-source Plan
 
  - [x] Inference codes
+ - [x] Interactive Demo
  - [ ] Technical Report
- - [ ] Interactive Demo
 
 ## 🚀 Quick Start
 
@@ -135,6 +135,12 @@ results/
 │   │   └── 000.log
 │   └── AgentSys_vRelease_human_in_loop/
 └── DrawBench/
+```
+
+## 🎮 Gradio Demo
+Default using 2 L40S GPUs to load FLUX.1-dev and PowerPaint with its own GPU, correspondingly
+```bash
+python interactive_demo.py
 ```
 
 ## 🙏 Acknowledgements
