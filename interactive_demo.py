@@ -4,7 +4,7 @@ import base64
 from PIL import Image
 import io
 import os
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any
 import uuid
 import time
 from datetime import datetime
@@ -48,7 +48,7 @@ class T2ICopilotAdapter:
         
         # initialize the model
         self.llm, self.llm_json = initialize_llms()
-        load_models()
+        # load_models()
         print("T2I-Copilot Adapter initialized")
     
     def get_or_create_session(self, session_id: str) -> 'SessionAdapter':
@@ -550,7 +550,6 @@ def create_demo():
         
         with gr.Accordion("Usage", open=False):
             gr.Markdown("""
-            ### Usage:
             1. **Input prompt**：In the text box, describe the image you want to generate
             2. **Click generate**：Click the "🚀 Start generating" button or press Enter
             3. **Interactive process**：
@@ -563,33 +562,36 @@ def create_demo():
             
             ### Tips:
             - The more detailed the description, the better the generation effect
-            - Can include image paths as references
             - Each session generates one image and then completes
             - Use "🆕 New session" to start a fresh generation
             """)
         
         chatbot = gr.Chatbot(
-            height=500,
+            height=700,
             label="Conversation",
             show_label=True
         )
-        msg = gr.Textbox(
-            label="Prompt",
-            placeholder="A cute cat sitting in a garden, sunny, with beautiful flowers in the background",
-            lines=2
-        )
+        with gr.Row():
+            with gr.Column(scale=3):
+                msg = gr.Textbox(
+                    label="Prompt",
+                    placeholder="A cute cat sitting in a garden, sunny, with beautiful flowers in the background",
+                    lines=1
+                )
+            with gr.Column(scale=1):
+                generate_btn = gr.Button("🚀 Generate!", variant="primary", size="lg")
         
         with gr.Row():
-            generate_btn = gr.Button("🚀 Start generating", variant="primary", size="lg")
-            new_session_btn = gr.Button("🆕 New session", variant="secondary")
-        
-        # status display
-        status_display = gr.Textbox(
-            label="Current status",
-            value="Waiting for input...",
-            interactive=False,
-            lines=1
-        )
+            with gr.Column(scale=3):
+                status_display = gr.Textbox(
+                    label="Current status",
+                    value="Waiting for input...",
+                    interactive=False,
+                    lines=1
+                )
+            with gr.Column(scale=1):
+                new_session_btn = gr.Button("🆕 New session", variant="secondary", size="lg")
+            
         
         # generate session ID
         session_id = gr.State(lambda: str(uuid.uuid4()))
