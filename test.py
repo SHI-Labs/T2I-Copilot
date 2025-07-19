@@ -44,6 +44,7 @@ flux_pipe = None
 # flux_pipe_editing = None
 powerpaint_controller = None
 
+
 class CreativityLevel(Enum):
     LOW = "low"      # Ask users for most details
     MEDIUM = "medium"  # Fill some details, ask for important ones
@@ -278,10 +279,11 @@ def initialize_llms(use_open_llm=False, open_llm_model="mistralai/Mistral-Small-
 
 class IntentionAnalyzer:
     """Helper class for intention understanding operations"""
-    def __init__(self, llm):
+    def __init__(self, llm, logger=None, config=None):
         self.llm = llm
         self.llm_json = llm.bind(response_format={"type": "json_object"})
         self.logger = logger
+        self.config = config
 
     def identify_image_path(self, prompt: str) -> str:
         from urllib.parse import urlparse
@@ -368,7 +370,7 @@ class IntentionAnalyzer:
             ]
         
         # Get response as string and parse it to dict
-        response = track_llm_call(self.llm_json.invoke, "intention_analysis", analysis_prompt)
+        response = self.llm_json.invoke(analysis_prompt)
         self.logger.debug(f"Raw LLM response: {response}")
         
         # response is <class 'langchain_core.messages.ai.AIMessage'>
@@ -396,7 +398,7 @@ class IntentionAnalyzer:
         """Retrieve refenrece content or style based on the analysis."""
 
         # get current config
-        current_config = config.get_current_config()
+        current_config = self.config.get_current_config()
         if "references" in analysis["identified_elements"] and analysis["identified_elements"]["references"].get("content"):
             current_config["reference_content_image"] = analysis["identified_elements"]["references"]["content"]
         
@@ -497,7 +499,7 @@ class IntentionAnalyzer:
             }}
             """
         
-        response = track_llm_call(self.llm_json.invoke, "refine_prompt", refinement_prompt)
+        response = self.llm_json.invoke(refinement_prompt)
         self.logger.debug(f"Refinement result: {response}")
 
         try:
@@ -535,8 +537,7 @@ def load_models():
         powerpaint_controller = PowerPaintController(weight_dtype, checkpoint_dir, False, "ppt-v2-1")
     
 
-@tool("Flux.1-dev")
-def generate_with_flux(prompt: str, seed: int) -> str:
+def generate_with_flux(prompt: str, seed: int, logger=None, config=None) -> str:
     """
     Given a prompt, Flux.1-dev generates general purpose images with high quality and consistency.
     
@@ -576,8 +577,7 @@ def generate_with_flux(prompt: str, seed: int) -> str:
         return f"Error generating image with Flux: {str(e)}"
 
 
-@tool("PowerPaint")
-def generate_with_powerpaint(prompt: str, existing_image_dir: str, mask_image_dir: str = None, task: str = "text-guided", seed: int = 42, guidance_scale: float = 7.5) -> str:
+def generate_with_powerpaint(prompt: str, existing_image_dir: str, mask_image_dir: str = None, task: str = "text-guided", seed: int = 42, guidance_scale: float = 7.5, logger=None, config=None) -> str:
     """
     PowerPaint: High-Quality Versatile Image Inpainting. Can perform text-guided inpainting (adding and object or replacing an existing object) or object removal.
     
@@ -766,22 +766,37 @@ def get_bbox_from_gpt(image_path: str, prompt: str, unwanted_object: str) -> str
 
 class ModelSelector:
     """Helper class for model selection and execution"""
-    def __init__(self, llm):
+    def __init__(self, llm, logger=None, config=None):
         self.llm = llm
         self.llm_json = llm.bind(response_format={"type": "json_object"})
         self.logger = logger
+        self.config = config
         self.tools = {
-            "Flux.1-dev": generate_with_flux,
-            "PowerPaint": generate_with_powerpaint,
+            "Flux.1-dev": lambda inputs: generate_with_flux(
+                prompt=inputs["prompt"],
+                seed=inputs["seed"],
+                logger=inputs.get("logger", self.logger),
+                config=inputs.get("config", self.config)
+            ),
+            "PowerPaint": lambda inputs: generate_with_powerpaint(
+                prompt=inputs["prompt"],
+                existing_image_dir=inputs["existing_image_dir"],
+                mask_image_dir=inputs["mask_image_dir"],
+                task=inputs["task"],
+                seed=inputs["seed"],
+                guidance_scale=inputs["guidance_scale"],
+                logger=inputs.get("logger", self.logger),
+                config=inputs.get("config", self.config)
+            ),
         }
         self.available_models = {
-            "Flux.1-dev": generate_with_flux.func.__doc__,
-            "PowerPaint": generate_with_powerpaint.func.__doc__,
+            "Flux.1-dev": generate_with_flux.__doc__,
+            "PowerPaint": generate_with_powerpaint.__doc__,
         }
 
     def _create_system_prompt(self) -> str:
         """Create the system prompt with all examples and guidelines."""
-        if config.regeneration_count > 0:
+        if self.config.regeneration_count > 0:
             return f"""Select the most suitable model for the given task.
             
             Available models:
@@ -1020,30 +1035,30 @@ class ModelSelector:
 
     def _create_task_prompt(self) -> str:
         """Create the task-specific prompt based on current state."""
-        if config.regeneration_count > 0:
-            prev_config = config.get_prev_config()
+        if self.config.regeneration_count > 0:
+            prev_config = self.config.get_prev_config()
             if prev_config['user_feedback']:
                 return f"""Analyze this regeneration request:
                 Previous result: {prev_config['gen_image_path']}
                 User feedback: {prev_config['user_feedback']}
-                Ultimate guiding principle prompt: {config.prompt_understanding['original_prompt']}
-                First Round Prompt Understanding: {config.prompt_understanding}"""
+                Ultimate guiding principle prompt: {self.config.prompt_understanding['original_prompt']}
+                First Round Prompt Understanding: {self.config.prompt_understanding}"""
             else:
                 return f"""Analyze this regeneration request:
                 Previous result: {prev_config['gen_image_path']}
                 Improvement needed: {prev_config['improvement_suggestions']}
-                Ultimate guiding principle prompt: {config.prompt_understanding['original_prompt']}
-                First Round Prompt Understanding: {config.prompt_understanding}"""
+                Ultimate guiding principle prompt: {self.config.prompt_understanding['original_prompt']}
+                First Round Prompt Understanding: {self.config.prompt_understanding}"""
         else:
-            if config.is_human_in_loop:
+            if self.config.is_human_in_loop:
                 return f"""Analyze this initial generation request:
-                Original prompt: {config.prompt_understanding['original_prompt']}
-                User clarification: {config.prompt_understanding['user_clarification']}
-                Prompt understanding: {config.prompt_understanding}"""
+                Original prompt: {self.config.prompt_understanding['original_prompt']}
+                User clarification: {self.config.prompt_understanding['user_clarification']}
+                Prompt understanding: {self.config.prompt_understanding}"""
             else:
                 return f"""Analyze this initial generation request:
-                Original prompt: {config.prompt_understanding['original_prompt']}
-                Prompt understanding: {config.prompt_understanding}"""
+                Original prompt: {self.config.prompt_understanding['original_prompt']}
+                Prompt understanding: {self.config.prompt_understanding}"""
 
     def select_model(self) -> Dict[str, Any]:
         """Analyze the refined prompt and select the most suitable model."""
@@ -1056,10 +1071,10 @@ class ModelSelector:
             self.logger.info(f"User Prompt for model selection: {task_prompt}")
 
             # Make the API call with structured prompts
-            response = track_llm_call(self.llm_json.invoke, "model_selection", [
-                ("system", base_prompt),
-                ("human", task_prompt)
-            ])
+            response = self.llm_json.invoke([
+                                ("system", base_prompt),
+                                ("human", task_prompt)
+                            ])
 
             return self._parse_llm_response(response)
 
@@ -1069,7 +1084,7 @@ class ModelSelector:
             return {
                 "selected_model": "Flux.1-dev",
                 "reference_content_image": None,
-                "generating_prompt": config.prompt_understanding.get('refined_prompt', config.prompt_understanding['original_prompt']),
+                "generating_prompt": self.config.prompt_understanding.get('refined_prompt', self.config.prompt_understanding['original_prompt']),
                 "unwanted_object": None,
                 "task_type": None,
                 "bbox_coordinates": None,
@@ -1093,7 +1108,7 @@ class ModelSelector:
             return {
                 "selected_model": "Flux.1-dev",
                 "reference_content_image": None,
-                "generating_prompt": config.prompt_understanding.get('refined_prompt', config.prompt_understanding['original_prompt']),
+                "generating_prompt": self.config.prompt_understanding.get('refined_prompt', self.config.prompt_understanding['original_prompt']),
                 "unwanted_object": None,
                 "task_type": None,
                 "bbox_coordinates": None,
@@ -1487,7 +1502,7 @@ def model_selection_node(state: MessagesState) -> Command[Literal["evaluation", 
         # If not a regeneration, raise the error
         raise
 
-def execute_model(model_name: str, prompt: str, task_type: str, mask_dir: str, reference_content_image: str) -> str:
+def execute_model(model_name: str, prompt: str, task_type: str, mask_dir: str, reference_content_image: str, logger=None, config=None) -> str:
     """Execute the selected model and return paths to generated images."""
     global flux_pipe, powerpaint_controller
     global model_inference_times
@@ -1498,17 +1513,17 @@ def execute_model(model_name: str, prompt: str, task_type: str, mask_dir: str, r
     # get regen count
     regen_count = config.regeneration_count
     if regen_count == 0:
-        seed = config.seed
+        seed = config.seed if config.seed is not None else random.randint(0, 1000000)
     else:
         # random seed
         seed = random.randint(0, 1000000)
 
     # Execute the selected model
     if model_name == "Flux.1-dev":
-        t0 = time.time()
-        result = selector.tools[model_name].invoke({"prompt": prompt, "seed": seed})
-        t1 = time.time()
-        model_inference_times["Flux.1-dev"].append(t1 - t0)
+        # t0 = time.time()
+        result = selector.tools[model_name]({"prompt": prompt, "seed": seed, "logger": logger, "config": config})
+        # t1 = time.time()
+        # model_inference_times["Flux.1-dev"].append(t1 - t0)
         return result
     elif model_name == "PowerPaint":
         
@@ -1517,22 +1532,24 @@ def execute_model(model_name: str, prompt: str, task_type: str, mask_dir: str, r
             guidance_scale = 10
         else:
             guidance_scale = 7.5
-        t0 = time.time()
+        # t0 = time.time()
         logger.info(f"exisiting_image_dir: {reference_content_image}")
         logger.info(f"mask_image_dir: {mask_dir}")
         logger.info(f"task_type: {task_type}")
         logger.info(f"Using guidance scale: {guidance_scale}")
             
-        result = selector.tools[model_name].invoke({
-                                                "prompt": prompt,
-                                                "existing_image_dir": reference_content_image,
-                                                "mask_image_dir": mask_dir,
-                                                "task": task_type,
-                                                "seed": seed,
-                                                "guidance_scale": guidance_scale,
-                                                })
-        t1 = time.time()
-        model_inference_times["PowerPaint"].append(t1 - t0)
+        result = selector.tools[model_name]({
+                                            "prompt": prompt,
+                                            "existing_image_dir": reference_content_image,
+                                            "mask_image_dir": mask_dir,
+                                            "task": task_type,
+                                            "seed": seed,
+                                            "guidance_scale": guidance_scale,
+                                            "logger": logger,
+                                            "config": config
+                                            })
+        # t1 = time.time()
+        # model_inference_times["PowerPaint"].append(t1 - t0)
         return result
     else:
         raise ValueError(f"Unknown model: {model_name}")
@@ -1574,7 +1591,7 @@ def evaluation_node(state: MessagesState) -> Command[Literal["model_selection", 
         ]
         
         # Get evaluation from GPT-4
-        evaluation_result = track_llm_call(llm_json.invoke, "evaluation", evaluation_prompt)
+        evaluation_result = llm_json.invoke(evaluation_prompt)
         evaluation_data = json.loads(evaluation_result.content)
 
         # Update config with evaluation score
