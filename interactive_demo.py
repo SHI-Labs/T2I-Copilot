@@ -48,24 +48,24 @@ class T2ICopilotAdapter:
         
         # initialize the model
         self.llm, self.llm_json = initialize_llms()
-        # load_models()
+        load_models()
         print("T2I-Copilot Adapter initialized")
     
-    def get_or_create_session(self, session_id: str) -> 'SessionAdapter':
+    def get_or_create_session(self, session_id: str, human_in_loop: bool = False) -> 'SessionAdapter':
         """get or create the session adapter"""
         if session_id not in self.sessions:
-            self.sessions[session_id] = SessionAdapter(session_id, self.llm, self.llm_json)
+            self.sessions[session_id] = SessionAdapter(session_id, self.llm, self.llm_json, human_in_loop)
         return self.sessions[session_id]
 
 class SessionAdapter:
     """session adapter: manage the state and interaction of a single session"""
     
-    def __init__(self, session_id: str, llm, llm_json):
+    def __init__(self, session_id: str, llm, llm_json, human_in_loop: bool = False):
         global logger, config
         self.session_id = session_id
         self.llm = llm
         self.llm_json = llm_json
-        self.config = T2IConfig(human_in_loop=True)
+        self.config = T2IConfig(human_in_loop=human_in_loop)
         self.workflow = create_t2i_workflow()
         self.messages = []
         self.generated_images = []
@@ -492,13 +492,13 @@ class SessionAdapter:
 def create_demo():
     adapter = T2ICopilotAdapter()
     
-    def generate_fn(message, history, session_id):
+    def generate_fn(message, history, session_id, human_in_loop):
         """specialized generate function, with status prompt"""
         if not message.strip():
             return "", history, "Please input the prompt"
         
         # process user input
-        session = adapter.get_or_create_session(session_id)
+        session = adapter.get_or_create_session(session_id, human_in_loop)
         result = session.process_user_input(message)
         
         # build response content, including text and image
@@ -550,21 +550,31 @@ def create_demo():
         
         with gr.Accordion("Usage", open=False):
             gr.Markdown("""
-            1. **Input prompt**：In the text box, describe the image you want to generate
-            2. **Click generate**：Click the "🚀 Start generating" button or press Enter
-            3. **Interactive process**：
+            1. **Configure settings**：Toggle "👩‍💻 Human in Loop" to control whether the system asks for human input during mask generation
+            2. **Input prompt**：In the text box, describe the image you want to generate
+            3. **Click generate**：Click the "🚀 Start generating" button or press Enter
+            4. **Interactive process**：
                - The system will analyze your requirements
                - If more information is needed, it will ask you
                - Automatically select the most suitable model to generate the image
+               - If Human in Loop is enabled, users can provide prompt clarifications, editing region selection and feedback for the generated image
                - Evaluate the image quality and display the result
-            4. **View results**：The generated image will be displayed directly in the dialog box
-            5. **Start new session**：After completion, click "🆕 New session" to generate another image
+            5. **View results**：The generated image will be displayed directly in the dialog box
+            6. **Start new session**：After completion, click "🆕 New session" to generate another image
             
             ### Tips:
             - The more detailed the description, the better the generation effect
             - Each session generates one image and then completes
             - Use "🆕 New session" to start a fresh generation
             """)
+        
+        with gr.Row():
+            with gr.Column(scale=1):
+                human_in_loop_toggle = gr.Checkbox(
+                    label="🤖 Human in Loop", 
+                    value=False,
+                    info="Enable to allow human interaction for prompt clarification, editing region selection and feedback"
+                )
         
         chatbot = gr.Chatbot(
             height=700,
@@ -599,14 +609,14 @@ def create_demo():
         # event handling - press Enter to submit
         msg.submit(
             generate_fn, 
-            [msg, chatbot, session_id], 
+            [msg, chatbot, session_id, human_in_loop_toggle], 
             [msg, chatbot, status_display, msg]
         )
         
         # event handling - click the generate button
         generate_btn.click(
             generate_fn, 
-            [msg, chatbot, session_id], 
+            [msg, chatbot, session_id, human_in_loop_toggle], 
             [msg, chatbot, status_display, msg]
         )
         
@@ -618,8 +628,8 @@ def create_demo():
             [session_id],
             [chatbot]
         ).then(
-            lambda: ("Waiting for input...", gr.update(interactive=True)),
-            outputs=[status_display, msg]
+            lambda: ("Waiting for input...", gr.update(interactive=True), False),
+            outputs=[status_display, msg, human_in_loop_toggle]
         )
     
     return interface
