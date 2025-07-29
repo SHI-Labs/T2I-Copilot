@@ -4,15 +4,27 @@
 
 [Chieh-Yun Chen](https://chiehyunchen.github.io/), Min Shi, Gong Zhang, [Humphrey Shi](https://www.humphreyshi.com/home)
 
-</div>
 
+</div>
 
 ![Header Image Placeholder](assets/fig-Teaser-Mustang.jpg)
 
-## 📰 News
-- [2025-6-26] 🎉🎉🎉 T2I-Copilot is accepted by ICCV 2025.
+[![arXiv](https://img.shields.io/badge/arXiv-2507.20536-red)](https://arxiv.org/pdf/2507.20536) [![MIT license](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/SHI-Labs/T2I-Copilot/blob/master/LICENSE)
 
-## 🎥 Demo
+## TL;DR
+🚀 First T2I system to enable both pre- and post-generation user control
+
+🤖 Propose a training-free multi-agent framework where 3 expert agents collaborate to boost interpretability & efficiency
+
+🔍 Bridges human intent with AI creativity for truly interactive & controllable generation
+
+💥 Matches top-tier models, Recraft V3, Imagen 3, and outperforms FLUX1.1-pro by +6.17% at just 16.6% of the cost
+
+🥇 Beats FLUX.1-dev (+9.11%) and SD 3.5 Large (+6.36%) on GenAI-Bench with VQAScore
+
+## 📰 News
+- Jun. 26, 2025 | 🎉🎉🎉 T2I-Copilot is accepted by ICCV 2025.
+
 
 <div align="center">
   <video src="place_holder" width="70%"> </video>
@@ -21,8 +33,14 @@
 ## 📑 Open-source Plan
 
  - [x] Inference codes
- - [ ] Technical Report
+ - [x] Technical Report
  - [ ] Interactive Demo
+
+## 🎨 Qualitative Performance
+![Header Image Placeholder](assets/fig-qualitative_result.jpg)
+
+## 📊 Quantitative Performance
+![Header Image Placeholder](assets/fig-quantitative_result.png)
 
 ## 🚀 Quick Start
 
