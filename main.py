@@ -1898,8 +1898,8 @@ def main(benchmark_name, human_in_the_loop, model_version, use_open_llm=False, o
             logger = setup_logging(save_dir, filename=f"{config.image_index}.log", console_output=False)
             config.logger = logger
 
-            if idx >= 1: 
-                break
+            # if idx >= 1: 
+            #     break
 
             # start timing
             torch.cuda.reset_peak_memory_stats(0)
