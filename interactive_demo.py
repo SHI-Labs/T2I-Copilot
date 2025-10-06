@@ -32,7 +32,6 @@ from utils import setup_logging
 
 from models.Grounded_SAM2.test_REF import referring_expression_segmentation
 from models.PowerPaint.test import generate_mask_from_bbox, dilate_mask, parse_bbox
-from models.mask_draw_client import request_mask
 
 
 # global config variable, used to share between modules
@@ -46,10 +45,28 @@ class T2ICopilotAdapter:
         global logger
         self.sessions: Dict[str, 'SessionAdapter'] = {}
         
-        # initialize the model
-        self.llm, self.llm_json = initialize_llms()
+        # initialize the model (gracefully handle missing API key)
+        try:
+            self.llm, self.llm_json = initialize_llms()
+        except Exception as e:
+            print("[WARN] Failed to initialize LLMs. Set your OpenAI API key and click 'Apply API Key'.")
+            self.llm, self.llm_json = None, None
         load_models()
         print("T2I-Copilot Adapter initialized")
+    
+    def set_openai_api_key(self, api_key: str):
+        """Set/OpenAI API key at runtime and reinitialize LLMs. Propagate to existing sessions."""
+        if api_key and api_key.strip():
+            os.environ['OPENAI_API_KEY'] = api_key.strip()
+            try:
+                self.llm, self.llm_json = initialize_llms()
+                # propagate to existing sessions
+                for _sid, sess in self.sessions.items():
+                    sess.llm = self.llm
+                    sess.llm_json = self.llm_json
+                print("[INFO] OpenAI API key applied and LLMs reinitialized.")
+            except Exception as e:
+                print(f"[ERROR] Reinitializing LLMs failed: {e}")
     
     def get_or_create_session(self, session_id: str, human_in_loop: bool = False) -> 'SessionAdapter':
         """get or create the session adapter"""
@@ -101,8 +118,8 @@ class SessionAdapter:
                 return self._handle_new_input(message)
             elif self.current_step == "waiting_for_clarification":
                 return self._handle_user_clarification(message)
-
-
+            elif self.current_step == "feedback_needed":
+                return self._handle_user_feedback(message)
             else:
                 self.current_step = "waiting_for_input"
                 return self._handle_new_input(message)
@@ -168,6 +185,44 @@ class SessionAdapter:
             
             raise
     
+    def _handle_user_feedback(self, user_input: str) -> Dict[str, Any]:
+        """process user feedback after evaluation and trigger regeneration"""
+        global logger, config
+        # allow user to finish the session explicitly
+        if user_input.strip().lower() in {"done", "finish", "end", "完成", "結束", "ok"}:
+            self.current_step = "completed"
+            return {
+                "response": "✅ Session completed. Start a new session to generate another image.",
+                "step": "completed",
+                "images": self.generated_images
+            }
+
+        try:
+            # store feedback to current config
+            current_config = config.get_current_config()
+            current_config["user_feedback"] = user_input
+
+            # create a new regeneration config and carry over previous outputs as reference
+            config.add_regeneration_config()
+            prev_config = config.get_prev_config()
+            new_config = config.get_current_config()
+
+            # if user provided an editing mask previously, carry it over as reference mask
+            if prev_config.get("editing_mask"):
+                new_config["reference_mask_dir"] = prev_config["editing_mask"]
+
+            # proceed with model selection and regeneration
+            return self._handle_model_selection()
+        except Exception as e:
+            import traceback
+            error_msg = f"Error in _handle_user_feedback: {str(e)}"
+            stack_trace = traceback.format_exc()
+            logger.error(error_msg)
+            logger.error(f"Stack trace: {stack_trace}")
+            print(f"ERROR: {error_msg}")
+            print(f"Stack trace: {stack_trace}")
+            raise
+
     def _handle_user_clarification(self, user_input: str) -> Dict[str, Any]:
         """process user clarification input"""
         global logger
@@ -196,7 +251,7 @@ class SessionAdapter:
             print(f"Stack trace: {stack_trace}")
             
             raise
-    
+
     def _handle_model_selection(self) -> Dict[str, Any]:
 
         global logger, config
@@ -237,67 +292,22 @@ class SessionAdapter:
                 
                 # Handle mask based on task type and human-in-the-loop mode
                 if config.regeneration_count == 0:
-                    if config.is_human_in_loop:
-                        logger.info(f"Human-in-the-loop mode enabled. Requesting mask for {current_config["reference_content_image"]}...")
-                        mask_image_path = request_mask(current_config["reference_content_image"])
-                    else:
-                        # For automated mask generation based on task type
-                        if current_config["task_type"] == "text-guided":
-                            if current_config["unwanted_object"] is not None:
-                                logger.info("Generating unwanted object mask by RES for text-guided inpainting")
-                                try:
-                                    # Call the referring_expression_segmentation function
-                                    sam_mask_path = referring_expression_segmentation(
-                                        image_path=current_config["reference_content_image"],
-                                        text_input=current_config["unwanted_object"],
-                                        output_dir=config.save_dir
-                                    )
-                                    # expand the mask to make the mask boundary unavailiable
-                                    print(f"Expanding mask: {sam_mask_path}")
-                                    sam_mask_path = dilate_mask(sam_mask_path)
-                                    if sam_mask_path and os.path.exists(sam_mask_path):
-                                        current_config["reference_mask_dir"] = sam_mask_path
-                                        print(f"Using SAM-generated mask: {current_config["reference_mask_dir"]}")
-                                    else:
-                                        print("Failed to generate mask with SAM.")
-                                except Exception as e:
-                                    print(f"Error generating mask with SAM: {e}")
-                            elif current_config["bbox_coordinates"] is not None:
-                                logger.info(f"Generating mask for text-guided inpainting: '{current_config["generating_prompt"]}'")
-                                gpt_mask_path = generate_mask_from_bbox(parse_bbox(current_config["bbox_coordinates"]), current_config["reference_content_image"])
-                                if gpt_mask_path:
-                                    current_config["reference_mask_dir"] = gpt_mask_path
-                                    logger.info(f"Using bbox-generated mask: {current_config["reference_mask_dir"]}")
-                                else:
-                                    logger.info("Failed to generate mask from bbox.")
-                            
-                            elif current_config["bbox_coordinates"] is None or current_config["reference_mask_dir"] is None:
-                                # an exception for bbox is None, given the image and the prompt for gpt to again provide the bbox for the referrring object's coordinates
-                                
-                                logger.info(f"Generating bounding box coordinates for text-guided inpainting: '{current_config['generating_prompt']}'")
-            
-                                # Call GPT to provide the bbox for the referring object's coordinates
-                                bbox_coords_or_mask_path, using_task_type = get_bbox_from_gpt(
-                                    image_path=current_config["reference_content_image"],
-                                    prompt=current_config["generating_prompt"],
-                                    unwanted_object=current_config["unwanted_object"]
-                                )
-                                
-                                if using_task_type == "bbox":
-                                    # Update the bbox_coordinates in the current config
-                                    current_config["bbox_coordinates"] = bbox_coords_or_mask_path
-                                    logger.info(f"Using GPT-generated bbox coordinates: {bbox_coords_or_mask_path}")
-                                    # Generate mask from the bbox coordinates
-                                    mask_image_path = generate_mask_from_bbox(parse_bbox(current_config["bbox_coordinates"]), current_config["reference_content_image"])
-                                elif using_task_type == "mask":
-                                    mask_image_path = bbox_coords_or_mask_path
-                                    logger.info(f"Using RES-generated mask: {mask_image_path}")
-
-                                mask_image_path = dilate_mask(mask_image_path)
-                                current_config["reference_mask_dir"] = mask_image_path
-                                
-                        elif current_config["task_type"] == "object-removal" and referring_expression_segmentation is not None:
-                            logger.info(f"Generating mask for object removal inpainting: '{current_config["unwanted_object"]}'")
+                    # if config.is_human_in_loop and not current_config.get("reference_mask_dir"):
+                    #     # In human-in-loop mode, caller should handle getting mask from user
+                    #     # Don't return here - caller will check and request mask if needed
+                    #     logger.info(f"Human-in-the-loop mode: mask needed for {current_config['reference_content_image']}")
+                    #     self.current_step = "waiting_for_mask"
+                    #     return {
+                    #         "response": "✏️ Please draw the editing mask on the image, then click 'Generate!'.",
+                    #         "step": "mask_needed",
+                    #         "images": self.generated_images,
+                    #         "reference_image": current_config["reference_content_image"],
+                    #     }
+                    # else:
+                    # For automated mask generation based on task type
+                    if not current_config.get("reference_mask_dir") and current_config["task_type"] == "text-guided":
+                        if current_config["unwanted_object"] is not None:
+                            logger.info("Generating unwanted object mask by RES for text-guided inpainting")
                             try:
                                 # Call the referring_expression_segmentation function
                                 sam_mask_path = referring_expression_segmentation(
@@ -315,70 +325,43 @@ class SessionAdapter:
                                     print("Failed to generate mask with SAM.")
                             except Exception as e:
                                 print(f"Error generating mask with SAM: {e}")
-
-                elif prev_regen_config["editing_mask"] is None:
-                    if config.is_human_in_loop:
-                        logger.info(f"Human-in-the-loop mode enabled. Requesting mask for {current_config["reference_content_image"]}...")
-                        current_config["reference_mask_dir"] = request_mask(current_config["reference_content_image"])
-                    else:
-                        # For automated mask generation based on task type
-                        if current_config["task_type"] == "text-guided":
-                            if current_config["unwanted_object"] is not None:
-                                logger.info("Generating unwanted object mask by RES for text-guided inpainting")
-                                try:
-                                    # Call the referring_expression_segmentation function
-                                    sam_mask_path = referring_expression_segmentation(
-                                        image_path=current_config["reference_content_image"],
-                                        text_input=current_config["unwanted_object"],
-                                        output_dir=config.save_dir
-                                    )
-                                    # expand the mask to make the mask boundary unavailiable
-                                    print(f"Expanding mask: {sam_mask_path}")
-                                    sam_mask_path = dilate_mask(sam_mask_path)
-                                    if sam_mask_path and os.path.exists(sam_mask_path):
-                                        current_config["reference_mask_dir"] = sam_mask_path
-                                        print(f"Using SAM-generated mask: {current_config["reference_mask_dir"]}")
-                                    else:
-                                        print("Failed to generate mask with SAM.")
-                                except Exception as e:
-                                    print(f"Error generating mask with SAM: {e}")
-                            elif current_config["bbox_coordinates"] is not None:
-                                logger.info(f"Generating mask for text-guided inpainting: '{current_config["generating_prompt"]}'")
-                                gpt_mask_path = generate_mask_from_bbox(parse_bbox(current_config["bbox_coordinates"]), current_config["reference_content_image"])
-                                if gpt_mask_path:
-                                    current_config["reference_mask_dir"] = gpt_mask_path
-                                    logger.info(f"Using bbox-generated mask: {current_config["reference_mask_dir"]}")
-                                else:
-                                    logger.info("Failed to generate mask from bbox.")
+                        elif current_config["bbox_coordinates"] is not None and not current_config.get("reference_mask_dir"):
+                            logger.info(f"Generating mask for text-guided inpainting: '{current_config["generating_prompt"]}'")
+                            gpt_mask_path = generate_mask_from_bbox(parse_bbox(current_config["bbox_coordinates"]), current_config["reference_content_image"])
+                            if gpt_mask_path:
+                                current_config["reference_mask_dir"] = gpt_mask_path
+                                logger.info(f"Using bbox-generated mask: {current_config["reference_mask_dir"]}")
+                            else:
+                                logger.info("Failed to generate mask from bbox.")
+                        
+                        elif (current_config["bbox_coordinates"] is None or current_config.get("reference_mask_dir") is None) and not current_config.get("reference_mask_dir"):
+                            # an exception for bbox is None, given the image and the prompt for gpt to again provide the bbox for the referrring object's coordinates
                             
-                            elif current_config["bbox_coordinates"] is None or current_config["reference_mask_dir"] is None:
-                                # an exception for bbox is None, given the image and the prompt for gpt to again provide the bbox for the referrring object's coordinates
-                                
-                                logger.info(f"Generating bounding box coordinates for text-guided inpainting: '{current_config['generating_prompt']}'")
-            
-                                # Call GPT to provide the bbox for the referring object's coordinates
-                                bbox_coords_or_mask_path, using_task_type = get_bbox_from_gpt(
-                                    image_path=current_config["reference_content_image"],
-                                    prompt=current_config["generating_prompt"],
-                                    unwanted_object=current_config["unwanted_object"]
-                                )
-                                
-                                if using_task_type == "bbox":
-                                    # Update the bbox_coordinates in the current config
-                                    current_config["bbox_coordinates"] = bbox_coords_or_mask_path
-                                    logger.info(f"Using GPT-generated bbox coordinates: {bbox_coords_or_mask_path}")
-                                    # Generate mask from the bbox coordinates
-                                    mask_image_path = generate_mask_from_bbox(parse_bbox(current_config["bbox_coordinates"]), current_config["reference_content_image"])
-                                elif using_task_type == "mask":
-                                    mask_image_path = bbox_coords_or_mask_path
-                                    logger.info(f"Using RES-generated mask: {mask_image_path}")
+                            logger.info(f"Generating bounding box coordinates for text-guided inpainting: '{current_config['generating_prompt']}'")
+        
+                            # Call GPT to provide the bbox for the referring object's coordinates
+                            bbox_coords_or_mask_path, using_task_type = get_bbox_from_gpt(
+                                image_path=current_config["reference_content_image"],
+                                prompt=current_config["generating_prompt"],
+                                unwanted_object=current_config["unwanted_object"]
+                            )
+                            
+                            if using_task_type == "bbox":
+                                # Update the bbox_coordinates in the current config
+                                current_config["bbox_coordinates"] = bbox_coords_or_mask_path
+                                logger.info(f"Using GPT-generated bbox coordinates: {bbox_coords_or_mask_path}")
+                                # Generate mask from the bbox coordinates
+                                mask_image_path = generate_mask_from_bbox(parse_bbox(current_config["bbox_coordinates"]), current_config["reference_content_image"])
+                            elif using_task_type == "mask":
+                                mask_image_path = bbox_coords_or_mask_path
+                                logger.info(f"Using RES-generated mask: {mask_image_path}")
 
-                                mask_image_path = dilate_mask(mask_image_path)
-                                current_config["reference_mask_dir"] = mask_image_path
-
-                        elif current_config["task_type"] == "object-removal" and referring_expression_segmentation is not None:
-                            logger.info(f"Generating mask for object removal inpainting: '{current_config["unwanted_object"]}'")
-
+                            mask_image_path = dilate_mask(mask_image_path)
+                            current_config["reference_mask_dir"] = mask_image_path
+                            
+                    elif not current_config.get("reference_mask_dir") and current_config["task_type"] == "object-removal" and referring_expression_segmentation is not None:
+                        logger.info(f"Generating mask for object removal inpainting: '{current_config["unwanted_object"]}'")
+                        try:
                             # Call the referring_expression_segmentation function
                             sam_mask_path = referring_expression_segmentation(
                                 image_path=current_config["reference_content_image"],
@@ -393,6 +376,92 @@ class SessionAdapter:
                                 print(f"Using SAM-generated mask: {current_config["reference_mask_dir"]}")
                             else:
                                 print("Failed to generate mask with SAM.")
+                        except Exception as e:
+                            print(f"Error generating mask with SAM: {e}")
+
+                elif prev_regen_config["editing_mask"] is None:
+                    # if config.is_human_in_loop and not current_config.get("reference_mask_dir"):
+                    #     logger.info(f"Human-in-the-loop mode enabled. Requesting mask for {current_config['reference_content_image']}...")
+                    #     self.current_step = "waiting_for_mask"
+                    #     return {
+                    #         "response": "✏️ Please draw the editing mask on the image, then click 'Generate!'.",
+                    #         "step": "mask_needed",
+                    #         "images": self.generated_images,
+                    #         "reference_image": current_config["reference_content_image"],
+                    #     }
+                    # else:
+                    # For automated mask generation based on task type
+                    if not current_config.get("reference_mask_dir") and current_config["task_type"] == "text-guided":
+                        if current_config["unwanted_object"] is not None:
+                            logger.info("Generating unwanted object mask by RES for text-guided inpainting")
+                            try:
+                                # Call the referring_expression_segmentation function
+                                sam_mask_path = referring_expression_segmentation(
+                                    image_path=current_config["reference_content_image"],
+                                    text_input=current_config["unwanted_object"],
+                                    output_dir=config.save_dir
+                                )
+                                # expand the mask to make the mask boundary unavailiable
+                                print(f"Expanding mask: {sam_mask_path}")
+                                sam_mask_path = dilate_mask(sam_mask_path)
+                                if sam_mask_path and os.path.exists(sam_mask_path):
+                                    current_config["reference_mask_dir"] = sam_mask_path
+                                    print(f"Using SAM-generated mask: {current_config["reference_mask_dir"]}")
+                                else:
+                                    print("Failed to generate mask with SAM.")
+                            except Exception as e:
+                                print(f"Error generating mask with SAM: {e}")
+                        elif current_config["bbox_coordinates"] is not None and not current_config.get("reference_mask_dir"):
+                            logger.info(f"Generating mask for text-guided inpainting: '{current_config["generating_prompt"]}'")
+                            gpt_mask_path = generate_mask_from_bbox(parse_bbox(current_config["bbox_coordinates"]), current_config["reference_content_image"])
+                            if gpt_mask_path:
+                                current_config["reference_mask_dir"] = gpt_mask_path
+                                logger.info(f"Using bbox-generated mask: {current_config["reference_mask_dir"]}")
+                            else:
+                                logger.info("Failed to generate mask from bbox.")
+                        
+                        elif (current_config["bbox_coordinates"] is None or current_config.get("reference_mask_dir") is None) and not current_config.get("reference_mask_dir"):
+                            # an exception for bbox is None, given the image and the prompt for gpt to again provide the bbox for the referrring object's coordinates
+                            
+                            logger.info(f"Generating bounding box coordinates for text-guided inpainting: '{current_config['generating_prompt']}'")
+        
+                            # Call GPT to provide the bbox for the referring object's coordinates
+                            bbox_coords_or_mask_path, using_task_type = get_bbox_from_gpt(
+                                image_path=current_config["reference_content_image"],
+                                prompt=current_config["generating_prompt"],
+                                unwanted_object=current_config["unwanted_object"]
+                            )
+                            
+                            if using_task_type == "bbox":
+                                # Update the bbox_coordinates in the current config
+                                current_config["bbox_coordinates"] = bbox_coords_or_mask_path
+                                logger.info(f"Using GPT-generated bbox coordinates: {bbox_coords_or_mask_path}")
+                                # Generate mask from the bbox coordinates
+                                mask_image_path = generate_mask_from_bbox(parse_bbox(current_config["bbox_coordinates"]), current_config["reference_content_image"])
+                            elif using_task_type == "mask":
+                                mask_image_path = bbox_coords_or_mask_path
+                                logger.info(f"Using RES-generated mask: {mask_image_path}")
+
+                            mask_image_path = dilate_mask(mask_image_path)
+                            current_config["reference_mask_dir"] = mask_image_path
+
+                    elif not current_config.get("reference_mask_dir") and current_config["task_type"] == "object-removal" and referring_expression_segmentation is not None:
+                        logger.info(f"Generating mask for object removal inpainting: '{current_config["unwanted_object"]}'")
+
+                        # Call the referring_expression_segmentation function
+                        sam_mask_path = referring_expression_segmentation(
+                            image_path=current_config["reference_content_image"],
+                            text_input=current_config["unwanted_object"],
+                            output_dir=config.save_dir
+                        )
+                        # expand the mask to make the mask boundary unavailiable
+                        print(f"Expanding mask: {sam_mask_path}")
+                        sam_mask_path = dilate_mask(sam_mask_path)
+                        if sam_mask_path and os.path.exists(sam_mask_path):
+                            current_config["reference_mask_dir"] = sam_mask_path
+                            print(f"Using SAM-generated mask: {current_config["reference_mask_dir"]}")
+                        else:
+                            print("Failed to generate mask with SAM.")
 
                 else:
                     # Use the mask from the previous regeneration (which user provided when evaluation)
@@ -467,13 +536,28 @@ class SessionAdapter:
             current_config["evaluation_score"] = evaluation_data["overall_score"]
             current_config["improvement_suggestions"] = evaluation_data["improvement_suggestions"]
             
-            # directly complete, no feedback
-            self.current_step = "completed"
-            return {
-                "response": f"🎉 Image generated successfully! \n\nScore: {evaluation_data['overall_score']}/10\n\nImprovement suggestions: {evaluation_data['improvement_suggestions']}\n\n✅ Generation completed. Please start a new session to generate another image.",
-                "step": "completed",
-                "images": self.generated_images
-            }
+            # if human-in-loop enabled, keep session open for feedback/regeneration
+            if config.is_human_in_loop:
+                self.current_step = "feedback_needed"
+                return {
+                    "response": (
+                        "🎉 Image generated successfully!\n\n"
+                        f"Score: {evaluation_data['overall_score']}/10\n\n"
+                        f"Suggestions: {evaluation_data['improvement_suggestions']}\n\n"
+                        "Please type your editing instructions (e.g., 'make it brighter', 'remove the tree'). "
+                        "Reply 'done' when you're satisfied."
+                    ),
+                    "step": "feedback_needed",
+                    "images": self.generated_images
+                }
+            else:
+                # directly complete, no feedback
+                self.current_step = "completed"
+                return {
+                    "response": f"🎉 Image generated successfully! \n\nScore: {evaluation_data['overall_score']}/10\n\nImprovement suggestions: {evaluation_data['improvement_suggestions']}\n\n✅ Generation completed. Please start a new session to generate another image.",
+                    "step": "completed",
+                    "images": self.generated_images
+                }
         except Exception as e:
             import traceback
             error_msg = f"Error in _handle_evaluation: {str(e)}"
@@ -492,13 +576,68 @@ class SessionAdapter:
 def create_demo():
     adapter = T2ICopilotAdapter()
     
-    def generate_fn(message, history, session_id, human_in_loop):
+    def generate_fn(message, history, session_id, human_in_loop, mask_data=None):
         """specialized generate function, with status prompt"""
-        if not message.strip():
-            return "", history, "Please input the prompt"
-        
-        # process user input
+            # guard: ensure API key is set and LLMs are initialized
+        if adapter.llm is None or not os.getenv('OPENAI_API_KEY'):
+            if isinstance(history, list):
+                history.append([None, "❗ Please set your OpenAI API key in the 'API Settings' box, then click 'Apply API Key'."])
+            return "", history, "❗ Missing OpenAI API key", gr.update(interactive=True), gr.update(visible=False)
         session = adapter.get_or_create_session(session_id, human_in_loop)
+
+        # If we're waiting for a mask and mask_data is provided, save it first
+        # if session.current_step == "waiting_for_mask" and mask_data is not None:
+        #     # Save the mask
+        #     mask_img = None
+        #     if isinstance(mask_data, dict):
+        #         if isinstance(mask_data.get('layers'), list) and len(mask_data['layers']) > 0:
+        #             layer0 = mask_data['layers'][0]
+        #             mask_img = layer0.getchannel('A') if layer0.mode in ('RGBA', 'LA') else layer0.convert('L')
+
+        #     if mask_img is not None:
+        #         from PIL import Image
+        #         pil_mask = mask_img if isinstance(mask_img, Image.Image) else Image.fromarray(mask_img)
+        #         pil_mask = pil_mask.convert('L').point(lambda p: 255 if p > 0 else 0)
+
+        #         mask_save_dir = session.config.save_dir
+        #         os.makedirs(mask_save_dir, exist_ok=True)
+        #         mask_path = os.path.join(mask_save_dir, f"{session.config.image_index}_editing_mask.png")
+        #         pil_mask.save(mask_path)
+
+        #         # Save composition preview
+        #         composition_path = os.path.join(mask_save_dir, f"{session.config.image_index}_composition_mask.png")
+        #         current_config = session.config.get_current_config()
+        #         ref_path = current_config.get("reference_content_image")
+        #         try:
+        #             if ref_path and os.path.exists(ref_path):
+        #                 base_img = Image.open(ref_path).convert('RGBA')
+        #                 red_overlay = Image.new('RGBA', base_img.size, (255, 0, 0, 128))
+        #                 overlay_region = Image.composite(red_overlay, Image.new('RGBA', base_img.size, (0, 0, 0, 0)), pil_mask)
+        #                 composed = Image.alpha_composite(base_img, overlay_region)
+        #                 composed.save(composition_path)
+        #             else:
+        #                 pil_mask.convert('RGB').save(composition_path)
+        #         except:
+        #             pil_mask.convert('RGB').save(composition_path)
+
+        #         # Add mask preview to history
+        #         if os.path.exists(composition_path):
+        #             history.append([None, gr.Image(composition_path)])
+        #         history.append([None, "Mask confirmed. Generating..."])
+
+        #         # Set mask in config
+        #         current_config["reference_mask_dir"] = mask_path
+        #         current_config["editing_mask"] = mask_path
+
+        #         if hasattr(session, 'logger') and session.logger:
+        #             session.logger.info(f"Generate: saved mask to {mask_path}")
+
+        # Allow empty message if we're continuing after mask
+        if not message.strip() and session.current_step != "waiting_for_mask":
+            # keep input enabled; hide mask UI
+            return "", history, "Please input the prompt", gr.update(interactive=True), gr.update(visible=False), gr.update(visible=False)
+
+        # process user input
         result = session.process_user_input(message)
         
         # build response content, including text and image
@@ -521,6 +660,7 @@ def create_demo():
         # return the status information
         status = f"Step: {result['step']}"
         disable_input = False
+        mask_editor_update = gr.update(visible=False)
         if result['step'] == 'completed':
             status = "✅ Image generated! Session completed."
             disable_input = True
@@ -528,15 +668,22 @@ def create_demo():
             status = "❓ Clarification needed"
         elif result['step'] == 'feedback_needed':
             status = "🔄 Feedback needed"
+        # elif result['step'] == 'mask_needed':
+        #     status = "✏️ Please draw the editing mask, then click 'Generate!' to continue"
+        #     # show mask editor with reference image
+        #     ref_img = result.get('reference_image')
+        #     mask_editor_update = gr.update(visible=True, value=ref_img)
         
         # set the input box according to the completion status
         if disable_input:
             msg_update = gr.update(interactive=False, placeholder="Session completed. Please start a new session to continue.")
         else:
             msg_update = gr.update(interactive=True)
-        
-        return "", history, status, msg_update
-    
+
+        print("[DEBUG] status = ", status)
+
+        return "", history, status, msg_update, mask_editor_update
+
     def reset_session(session_id):
         """reset session"""
         if session_id in adapter.sessions:
@@ -550,16 +697,16 @@ def create_demo():
         
         with gr.Accordion("Usage", open=False):
             gr.Markdown("""
-            1. **Configure settings**：Toggle "👩‍💻 Human in Loop" to control whether the system asks for human input during mask generation
-            2. **Input prompt**：In the text box, describe the image you want to generate
-            3. **Click generate**：Click the "🚀 Start generating" button or press Enter
+            1. **Configure settings**：Toggle "👩‍💻 Human in Loop" to enable control before and after the generation process
+            2. **Prompt**：In the text box, describe the image you want to generate
+            3. **Click generate**：Click the "🚀 Generate!" button or press Enter
             4. **Interactive process**：
                - The system will analyze your requirements
-               - If more information is needed, it will ask you
+               - If more information is needed, it will ask 
                - Automatically select the most suitable model to generate the image
-               - If Human in Loop is enabled, users can provide prompt clarifications, editing region selection and feedback for the generated image
+               - If Human in Loop is enabled, users can provide prompt clarifications and feedback for the generated image
                - Evaluate the image quality and display the result
-            5. **View results**：The generated image will be displayed directly in the dialog box
+            5. **View results**：The generated image will be displayed directly in the conversation
             6. **Start new session**：After completion, click "🆕 New session" to generate another image
             
             ### Tips:
@@ -568,12 +715,24 @@ def create_demo():
             - Use "🆕 New session" to start a fresh generation
             """)
         
+        with gr.Accordion("API Settings", open=True):
+            with gr.Row():
+                with gr.Column(scale=3):
+                    api_key_input = gr.Textbox(
+                        label="OpenAI API Key",
+                        placeholder="sk-...",
+                        type="password",
+                        lines=1
+                    )
+                with gr.Column(scale=1):
+                    apply_api_key_btn = gr.Button("Apply API Key", variant="secondary", size="lg")
+
         with gr.Row():
             with gr.Column(scale=1):
                 human_in_loop_toggle = gr.Checkbox(
                     label="🤖 Human in Loop", 
                     value=False,
-                    info="Enable to allow human interaction for prompt clarification, editing region selection and feedback"
+                    info="Enable to allow human interaction for prompt clarification and feedback"
                 )
         
         chatbot = gr.Chatbot(
@@ -581,6 +740,9 @@ def create_demo():
             label="Conversation",
             show_label=True
         )
+        # Mask drawing UI (hidden by default)
+        # Note: When mask is needed, user draws on mask_editor then clicks "Generate!" to continue
+        mask_editor = gr.ImageMask(label="Draw the editing mask, then click 'Generate!' to continue", visible=False, type='pil')
         with gr.Row():
             with gr.Column(scale=3):
                 msg = gr.Textbox(
@@ -606,18 +768,30 @@ def create_demo():
         # generate session ID
         session_id = gr.State(lambda: str(uuid.uuid4()))
         
+        # API key apply handler
+        def on_apply_api_key(api_key):
+            adapter.set_openai_api_key(api_key)
+            return "", "🔑 OpenAI API key applied"
+        
         # event handling - press Enter to submit
         msg.submit(
-            generate_fn, 
-            [msg, chatbot, session_id, human_in_loop_toggle], 
-            [msg, chatbot, status_display, msg]
+            generate_fn,
+            [msg, chatbot, session_id, human_in_loop_toggle, mask_editor],
+            [msg, chatbot, status_display, msg, mask_editor]
         )
-        
+
         # event handling - click the generate button
         generate_btn.click(
-            generate_fn, 
-            [msg, chatbot, session_id, human_in_loop_toggle], 
-            [msg, chatbot, status_display, msg]
+            generate_fn,
+            [msg, chatbot, session_id, human_in_loop_toggle, mask_editor],
+            [msg, chatbot, status_display, msg, mask_editor]
+        )
+        
+        # wire API key apply button after status_display exists
+        apply_api_key_btn.click(
+            on_apply_api_key,
+            [api_key_input],
+            [api_key_input, status_display]
         )
         
         new_session_btn.click(
@@ -628,8 +802,8 @@ def create_demo():
             [session_id],
             [chatbot]
         ).then(
-            lambda: ("Waiting for input...", gr.update(interactive=True), False),
-            outputs=[status_display, msg, human_in_loop_toggle]
+            lambda: ("Waiting for input...", gr.update(interactive=True), False, gr.update(visible=False, value=None)),
+            outputs=[status_display, msg, human_in_loop_toggle, mask_editor]
         )
     
     return interface
