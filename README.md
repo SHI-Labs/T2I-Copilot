@@ -14,7 +14,7 @@
 ## TL;DR
 
 <div align="center">
-  <video src="assets/T2I-Copilot-trailer.mp4" width="100%"> </video>
+  <video src="https://github.com/user-attachments/assets/75f7e356-b59a-4999-85f4-9a9e281e6570" width="100%"> </video>
 </div>
 
 🚀 First T2I system to enable both pre- and post-generation user control
@@ -52,7 +52,7 @@ python interactive_demo.py
 ```
 
 <div align="center">
-  <video src="assets/How-the-demo-works.mp4" width="100%"> </video>
+  <video src="https://github.com/user-attachments/assets/d86cc6a8-160e-4eb5-9b54-f7bb7e3e3da5" width="100%"> </video>
 </div>
 
 
