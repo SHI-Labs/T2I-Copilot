@@ -12,6 +12,11 @@
 [![arXiv](https://img.shields.io/badge/arXiv-2507.20536-red)](https://arxiv.org/pdf/2507.20536) [![MIT license](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/SHI-Labs/T2I-Copilot/blob/master/LICENSE)
 
 ## TL;DR
+
+<div align="center">
+  <video src="assets/T2I-Copilot-trailer.mp4" width="100%"> </video>
+</div>
+
 🚀 First T2I system to enable both pre- and post-generation user control
 
 🤖 Propose a training-free multi-agent framework where 3 expert agents collaborate to boost interpretability & efficiency
@@ -23,18 +28,33 @@
 🥇 Beats FLUX.1-dev (+9.11%) and SD 3.5 Large (+6.36%) on GenAI-Bench with VQAScore
 
 ## 📰 News
+- Oct. 5, 2025 | Release gradio interactive demo
 - Jun. 26, 2025 | 🎉🎉🎉 T2I-Copilot is accepted by ICCV 2025.
 
 
+## 🎮 Gradio Demo
+Default using 2 L40S GPUs to load FLUX.1-dev and PowerPaint with its own GPU, correspondingly
+```bash
+# switch to branch feature/interactive-demo
+conda env create -f environment_demo.yaml
+conda activate t2i_copilot_demo
+
+# Download checkpoint from PowerPaint (https://github.com/open-mmlab/PowerPaint): Image inpainting & editing
+git lfs clone https://huggingface.co/JunhaoZhuang/PowerPaint-v2-1/ models/PowerPaint/checkpoints/ppt-v2-1
+
+# Download checkpoint from GroundingSAM2 (https://github.com/IDEA-Research/Grounded-SAM-2): Mask generation for editing
+cd models/Grounded_SAM2/checkpoints/
+bash download_ckpts.sh
+cd models/Grounded_SAM2/gdino_checkpoints/
+bash download_ckpts.sh
+
+python interactive_demo.py
+```
+
 <div align="center">
-  <video src="place_holder" width="70%"> </video>
+  <video src="assets/How-the-demo-works.mp4" width="100%"> </video>
 </div>
 
-## 📑 Open-source Plan
-
- - [x] Inference codes
- - [x] Technical Report
- - [ ] Interactive Demo
 
 ## 🎨 Qualitative Performance
 ![Header Image Placeholder](assets/fig-qualitative_result.jpg)

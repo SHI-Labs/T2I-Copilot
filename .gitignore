@@ -2,3 +2,6 @@ models/Grounded_SAM2/checkpoints/*.pt
 models/Grounded_SAM2/gdino_checkpoints/*.pth
 models/PowerPaint/checkpoints/*
 models/PowerPaint/*png
+
+gradio_cache/*
+demo_logs/*
