@@ -10,19 +10,28 @@
 ![Header Image Placeholder](assets/fig-Teaser-Mustang.jpg)
 
 ## 📰 News
+- [2025-10-5] Release gradio interactive demo
 - [2025-6-26] 🎉🎉🎉 T2I-Copilot is accepted by ICCV 2025.
 
 ## 🎥 Demo
 
 <div align="center">
-  <video src="place_holder" width="70%"> </video>
+  <video src="assets/T2I-Copilot-trailer.mp4" width="100%"> </video>
 </div>
 
-## 📑 Open-source Plan
 
- - [x] Inference codes
- - [x] Interactive Demo
- - [ ] Technical Report
+## 🎮 Gradio Demo
+Default using 2 L40S GPUs to load FLUX.1-dev and PowerPaint with its own GPU, correspondingly
+```bash
+conda env create -f environment_demo.yaml
+conda activate t2i_copilot_demo
+
+python interactive_demo.py
+```
+
+<div align="center">
+  <video src="assets/How-the-demo-works.mp4" width="100%"> </video>
+</div>
 
 ## 🚀 Quick Start
 
@@ -135,12 +144,6 @@ results/
 │   │   └── 000.log
 │   └── AgentSys_vRelease_human_in_loop/
 └── DrawBench/
-```
-
-## 🎮 Gradio Demo
-Default using 2 L40S GPUs to load FLUX.1-dev and PowerPaint with its own GPU, correspondingly
-```bash
-python interactive_demo.py
 ```
 
 ## 🙏 Acknowledgements
