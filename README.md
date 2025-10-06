@@ -9,15 +9,26 @@
 
 ![Header Image Placeholder](assets/fig-Teaser-Mustang.jpg)
 
-## 📰 News
-- Oct. 5, 2025 | Release gradio interactive demo
-- Jun. 26, 2025 | 🎉🎉🎉 T2I-Copilot is accepted by ICCV 2025.
-
-## 🎥 Demo
+## 🎥 TL;DR
 
 <div align="center">
   <video src="assets/T2I-Copilot-trailer.mp4" width="100%"> </video>
 </div>
+
+🚀 First T2I system to enable both pre- and post-generation user control
+
+🤖 Propose a training-free multi-agent framework where 3 expert agents collaborate to boost interpretability & efficiency
+
+🔍 Bridges human intent with AI creativity for truly interactive & controllable generation
+
+💥 Matches top-tier models, Recraft V3, Imagen 3, and outperforms FLUX1.1-pro by +6.17% at just 16.6% of the cost
+
+🥇 Beats FLUX.1-dev (+9.11%) and SD 3.5 Large (+6.36%) on GenAI-Bench with VQAScore
+
+
+## 📰 News
+- Oct. 5, 2025 | Release gradio interactive demo
+- Jun. 26, 2025 | 🎉🎉🎉 T2I-Copilot is accepted by ICCV 2025.
 
 
 ## 🎮 Gradio Demo
